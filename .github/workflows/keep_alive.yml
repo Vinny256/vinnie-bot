@@ -1,18 +1,19 @@
 name: Vinnie Bot Keep Alive
 on:
   schedule:
-    - cron: '*/5 * * * *' # Changed to 5 minutes to be safer
+    - cron: '*/5 * * * *' # Ping every 5 minutes
   workflow_dispatch: 
 
 jobs:
   ping-bot:
     runs-on: ubuntu-latest
     steps:
-      - name: Send Ping
+      - name: Send Multi-Ping
         run: |
-          if [ -z "${{ secrets.RENDER_URL }}" ]; then
-            echo "❌ ERROR: RENDER_URL secret is not set!"
-            exit 1
-          fi
-          curl -sL -A "Mozilla/5.0" ${{ secrets.RENDER_URL }} > /dev/null
-          echo "✅ Successfully pinged the bot at $(date)"
+          # Sends 3 pings 10 seconds apart to make sure Render wakes up
+          curl -sL -A "Mozilla/5.0" ${{ secrets.RENDER_URL }}
+          sleep 10
+          curl -sL -A "Mozilla/5.0" ${{ secrets.RENDER_URL }}
+          sleep 10
+          curl -sL -A "Mozilla/5.0" ${{ secrets.RENDER_URL }}
+          echo "✅ Multi-ping complete!"
