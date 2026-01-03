@@ -1,0 +1,5 @@
+node_modules
+vinnie_auth
+.env
+.git
+npm-debug.log

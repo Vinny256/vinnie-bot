@@ -1,5 +1,5 @@
 {
-  "autoRead": false,
+  "autoRead": true,
   "autoStatus": true,
   "autoReact": true
 }

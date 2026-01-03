@@ -1,0 +1,15 @@
+name: Vinnie Bot Keep Alive
+on:
+  schedule:
+    - cron: '*/10 * * * *' # This pings the bot every 10 minutes
+  workflow_dispatch:      # This lets the user start it manually
+
+jobs:
+  ping-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Ping
+        run: |
+          # The user will add their Render URL in GitHub Secrets
+          curl -s ${{ secrets.RENDER_URL }} > /dev/null
+          echo "Successfully pinged the bot to keep it awake!"
