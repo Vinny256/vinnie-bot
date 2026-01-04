@@ -12,12 +12,10 @@ const pino = require("pino");
 const fs = require("fs-extra");
 const path = require("path");
 const qrcode = require('qrcode-terminal');
-const http = require('http'); // 🌍 Added for Web Server
+const http = require('http');
 
 const automationHandler = require('./listeners/automation');
 
-// 🌍 1. WEB SERVER FOR RENDER/DOCKER
-// This tells Render: "I am alive, please don't shut me down!"
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('VINNIE BOT IS RUNNING 🚀');
@@ -28,7 +26,6 @@ async function startVinnie() {
     const authFolder = './vinnie_auth';
     const sessionID = process.env.SESSION_ID;
 
-    // 🏗️ 2. SESSION INJECTION (Buffer Correction)
     if (sessionID && !fs.existsSync(`${authFolder}/creds.json`)) {
         console.log("📦 SESSION_ID detected. Injecting...");
         await fs.ensureDir(authFolder);
@@ -41,7 +38,6 @@ async function startVinnie() {
         } catch (e) { console.error("❌ Injection failed:", e.message); }
     }
 
-    // 📁 3. RECURSIVE COMMAND LOADER
     const commands = new Map();
     const cmdPath = path.resolve(__dirname, 'commands');
     if (fs.existsSync(cmdPath)) {
@@ -74,7 +70,7 @@ async function startVinnie() {
         },
         logger: pino({ level: "fatal" }),
         browser: Browsers.ubuntu('Chrome'), 
-        syncFullHistory: false, // 🛡️ Anti-Ban
+        syncFullHistory: false, 
         markOnlineOnConnect: true,
         fireInitQueries: true,
         getMessage: async (key) => { return { conversation: 'vinnie_sync' } }
@@ -90,9 +86,17 @@ async function startVinnie() {
         }
         if (connection === 'close') {
             const code = lastDisconnect?.error?.output?.statusCode;
-            if (code === DisconnectReason.loggedOut || code === 401) {
+            const restartRequired = code !== DisconnectReason.loggedOut;
+
+            // 🛠️ MAC ERROR & CORRUPTION PROTECTION
+            // If the error is a Bad MAC or Session error, wipe the folder so we can rescan cleanly
+            const reason = lastDisconnect?.error?.message || "";
+            if (reason.includes("Bad MAC") || code === 401 || code === DisconnectReason.loggedOut) {
+                console.log("🧹 Session corrupted (Bad MAC). Wiping auth folder for a clean start...");
                 await fs.remove(authFolder);
             }
+
+            console.log(`❌ Connection closed. Restarting in 5s...`);
             setTimeout(() => startVinnie(), 5000); 
         } else if (connection === 'open') {
             console.log("🚀 VINNIE BOT IS ONLINE!");
@@ -105,11 +109,19 @@ async function startVinnie() {
             try {
                 if (!msg.message) continue;
 
-                // 🛡️ 4. ANTI-BAN SHIELD (Ignore old messages)
-                const diff = Math.floor(Date.now() / 1000) - msg.messageTimestamp;
-                if (diff > 15) continue; 
+                // 🛡️ STRICT SPAM & BAN PROTECTION (Anti-Lag)
+                // Ignore messages older than 10 seconds to prevent "Reply Flood" on restart
+                const now = Math.floor(Date.now() / 1000);
+                const msgTime = msg.messageTimestamp;
+                const diff = now - msgTime;
+                if (diff > 10) {
+                    console.log(`⚠️ Ignoring old message (${diff}s ago) to prevent ban.`);
+                    continue; 
+                }
 
                 const isMe = msg.key.fromMe;
+                // Note: We allow !isMe OR isMe so it replies to the host number too.
+                
                 const mType = Object.keys(msg.message)[0];
                 const text = (
                     mType === 'conversation' ? msg.message.conversation :
