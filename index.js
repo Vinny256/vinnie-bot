@@ -13,8 +13,19 @@ const fs = require("fs-extra");
 const path = require("path");
 const qrcode = require('qrcode-terminal');
 const http = require('http');
+const mongoose = require('mongoose');
 
 const automationHandler = require('./listeners/automation');
+
+// --- 🔐 SECURE DATABASE CONFIG ---
+// No hardcoding here. Set MONGODB_URI in your Render/Docker/Railway settings.
+const mongoURI = process.env.MONGODB_URI; 
+
+const SessionSchema = new mongoose.Schema({
+    sessionId: { type: String, unique: true },
+    fullCreds: String
+});
+const SessionModel = mongoose.model('VinnieSession', SessionSchema);
 
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -26,18 +37,36 @@ async function startVinnie() {
     const authFolder = './vinnie_auth';
     const sessionID = process.env.SESSION_ID;
 
+    // --- 📥 MONGODB SESSION INJECTION ---
     if (sessionID && !fs.existsSync(`${authFolder}/creds.json`)) {
-        console.log("📦 SESSION_ID detected. Injecting...");
+        console.log("📦 SESSION_ID detected. Fetching from Secure DB...");
         await fs.ensureDir(authFolder);
         try {
-            const cleanID = sessionID.replace('VINNIE-SESSION-', '').trim();
-            const decoded = Buffer.from(cleanID, 'base64').toString('utf-8');
-            const creds = JSON.parse(decoded, BufferJSON.reviver);
-            await fs.writeFile(path.join(authFolder, 'creds.json'), JSON.stringify(creds, BufferJSON.replacer, 2));
-            console.log("✅ Credentials injected.");
-        } catch (e) { console.error("❌ Injection failed:", e.message); }
+            // Only connect if not already connected
+            if (mongoose.connection.readyState === 0) {
+                await mongoose.connect(mongoURI);
+            }
+            
+            const sessionData = await SessionModel.findOne({ sessionId: sessionID });
+
+            if (sessionData) {
+                const credsJson = Buffer.from(sessionData.fullCreds, 'base64').toString('utf-8');
+                const creds = JSON.parse(credsJson, BufferJSON.reviver);
+                
+                await fs.writeFile(
+                    path.join(authFolder, 'creds.json'), 
+                    JSON.stringify(creds, BufferJSON.replacer, 2)
+                );
+                console.log("✅ Credentials injected from Cloud.");
+            } else {
+                console.log("❌ Error: SESSION_ID not found in Database.");
+            }
+        } catch (e) { 
+            console.error("❌ DB Session Load failed:", e.message); 
+        }
     }
 
+    // --- 📂 COMMAND LOADER ---
     const commands = new Map();
     const cmdPath = path.resolve(__dirname, 'commands');
     if (fs.existsSync(cmdPath)) {
@@ -86,13 +115,10 @@ async function startVinnie() {
         }
         if (connection === 'close') {
             const code = lastDisconnect?.error?.output?.statusCode;
-            const restartRequired = code !== DisconnectReason.loggedOut;
-
-            // 🛠️ MAC ERROR & CORRUPTION PROTECTION
-            // If the error is a Bad MAC or Session error, wipe the folder so we can rescan cleanly
             const reason = lastDisconnect?.error?.message || "";
+            
             if (reason.includes("Bad MAC") || code === 401 || code === DisconnectReason.loggedOut) {
-                console.log("🧹 Session corrupted (Bad MAC). Wiping auth folder for a clean start...");
+                console.log("🧹 Session corrupted. Wiping auth folder...");
                 await fs.remove(authFolder);
             }
 
@@ -109,18 +135,13 @@ async function startVinnie() {
             try {
                 if (!msg.message) continue;
 
-                // 🛡️ STRICT SPAM & BAN PROTECTION (Anti-Lag)
-                // Ignore messages older than 10 seconds to prevent "Reply Flood" on restart
+                // 🛡️ [ANTI-SPAM] 10-second threshold
                 const now = Math.floor(Date.now() / 1000);
                 const msgTime = msg.messageTimestamp;
-                const diff = now - msgTime;
-                if (diff > 10) {
-                    console.log(`⚠️ Ignoring old message (${diff}s ago) to prevent ban.`);
-                    continue; 
-                }
+                if (now - msgTime > 10) continue; 
 
                 const isMe = msg.key.fromMe;
-                // Note: We allow !isMe OR isMe so it replies to the host number too.
+                // [SELF-REPLY] Removed 'if (isMe) return' to allow bot to trigger itself
                 
                 const mType = Object.keys(msg.message)[0];
                 const text = (
@@ -130,7 +151,7 @@ async function startVinnie() {
                     mType === 'videoMessage' ? msg.message.videoMessage.caption : ""
                 ).trim();
 
-                if (text) console.log(`📩 [${msg.pushName || (isMe ? 'Owner' : 'User')}]: ${text}`);
+                if (text) console.log(`📩 [${msg.pushName || (isMe ? 'Owner (Self)' : 'User')}]: ${text}`);
 
                 await automationHandler(sock, msg);
 
